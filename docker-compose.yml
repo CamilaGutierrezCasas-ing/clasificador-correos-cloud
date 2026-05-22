@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:16
+    container_name: email_classifier_db
+    environment:
+      POSTGRES_DB: email_classifier
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  backend:
+    build:
+      context: ./backend_base
+      dockerfile: Dockerfile
+    container_name: email_classifier_backend
+    depends_on:
+      - db
+    env_file:
+      - ./backend_base/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/email_classifier
+      BACKEND_HOST: 0.0.0.0
+      BACKEND_PORT: 8000
+      CORS_ORIGINS: '["http://localhost:3000","http://127.0.0.1:3000","http://localhost:5173","http://127.0.0.1:5173","http://localhost","http://127.0.0.1"]'
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./correo-frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: http://127.0.0.1:8000/api/v1
+    container_name: email_classifier_frontend
+    depends_on:
+      - backend
+    ports:
+    - "3000:80"
+volumes:
+  postgres_data:
