@@ -86,7 +86,7 @@ export default function UserDashboardPage() {
       const activeAccounts = accounts.filter((account) => account.is_active);
 
       const responses = await Promise.all(
-        activeAccounts.map((account) => getLiveEmailsByAccount(account.id, 200))
+        activeAccounts.map((account) => getLiveEmailsByAccount(account.id, 500))
       );
 
       const allEmails = responses.flat();
