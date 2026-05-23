@@ -83,14 +83,21 @@ export default function UserDashboardPage() {
     setSelectedCategory('todos');
 
     try {
-      const data = await getLiveEmailsByAccount(accountId, 50);
-      setLiveEmails(data);
-      setEmails(data);
+      const activeAccounts = accounts.filter((account) => account.is_active);
+
+      const responses = await Promise.all(
+        activeAccounts.map((account) => getLiveEmailsByAccount(account.id, 200))
+      );
+
+      const allEmails = responses.flat();
+
+      setLiveEmails(allEmails);
+      setEmails(allEmails);
       setIsLiveMode(true);
     } finally {
       setLoadingEmails(false);
     }
-  };
+ };
 
   const handleCategoryFilter = async (category) => {
     setSelectedCategory(category);
