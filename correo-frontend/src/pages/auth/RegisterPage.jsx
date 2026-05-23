@@ -6,7 +6,7 @@ import Button from '../../components/common/Button';
 import { useAuth } from '../../hooks/useAuth';
 
 export default function RegisterPage() {
-  const { register } = useAuth();
+  const { register, logout } = useAuth();
   const navigate = useNavigate();
   const [form, setForm] = useState({ name: '', email: '', password: '' });
   const [error, setError] = useState('');
@@ -21,10 +21,9 @@ export default function RegisterPage() {
     setLoading(true);
     setError('');
     try {
-      const user = await register(form);
-      if (user.role.name === 'admin') navigate('/admin');
-      else if (user.role.name === 'secretaria') navigate('/secretaria');
-      else navigate('/usuario');
+      await register(form);
+      logout();
+      navigate('/login', { replace: true });
     } catch (err) {
       setError(err?.response?.data?.detail || 'No se pudo crear la cuenta');
     } finally {
