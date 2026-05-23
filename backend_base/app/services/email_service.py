@@ -209,7 +209,7 @@ def sync_emails_from_microsoft_account(
     *,
     owner: User,
     account: LinkedAccount,
-    top: int = 20,
+    top: int = 200,
 ) -> list[Email]:
     messages = get_account_messages(access_token=account.access_token, top=top)
     saved_emails: list[Email] = []

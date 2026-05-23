@@ -18,12 +18,6 @@ export default function HomePage() {
             </p>
           </div>
           <div className="rounded-3xl border border-slate-800 bg-slate-900 p-8">
-            <ul className="space-y-4 text-sm text-slate-300">
-              <li>Autenticación JWT</li>
-              <li>Panel por roles: usuario, secretaria y administrador</li>
-              <li>Consumo de API FastAPI con Axios</li>
-              <li>UI limpia con Tailwind</li>
-            </ul>
           </div>
         </div>
       </div>
