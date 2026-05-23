@@ -83,7 +83,7 @@ export default function UserDashboardPage() {
     setSelectedCategory('todos');
 
      try {
-    const PER_ACCOUNT_LIMIT = 400;
+    const PER_ACCOUNT_LIMIT = 200;
     const activeAccounts = accounts.filter((account) => account.is_active);
 
     const responses = await Promise.all(
