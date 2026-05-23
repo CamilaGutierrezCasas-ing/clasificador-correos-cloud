@@ -82,12 +82,15 @@ export default function UserDashboardPage() {
     setLoadingEmails(true);
     setSelectedCategory('todos');
 
-    try {
-      const activeAccounts = accounts.filter((account) => account.is_active);
+     try {
+    const PER_ACCOUNT_LIMIT = 400;
+    const activeAccounts = accounts.filter((account) => account.is_active);
 
-      const responses = await Promise.all(
-        activeAccounts.map((account) => getLiveEmailsByAccount(account.id, 500))
-      );
+    const responses = await Promise.all(
+      activeAccounts.map((account) =>
+        getLiveEmailsByAccount(account.id, PER_ACCOUNT_LIMIT)
+      )
+    );
 
       const allEmails = responses.flat();
 
