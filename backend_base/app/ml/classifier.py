@@ -66,12 +66,14 @@ def train_and_save_demo_model() -> None:
 
 
 def ensure_model_artifacts() -> None:
-    if (
-        not MODEL_PATH.exists()
-        or not VECTORIZER_PATH.exists()
-        or not FEATURE_CONFIG_PATH.exists()
-    ):
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    if not MODEL_PATH.exists() or not VECTORIZER_PATH.exists():
         train_and_save_demo_model()
+        return
+
+    if not FEATURE_CONFIG_PATH.exists():
+        joblib.dump({"use_embeddings": False}, FEATURE_CONFIG_PATH)
 
 
 def load_model_artifacts():
