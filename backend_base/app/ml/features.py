@@ -130,10 +130,8 @@ def build_hybrid_matrix(
     else:
         tfidf_matrix = vectorizer.transform(texts)
 
-    meta_matrix = build_meta_matrix(texts)
+    if not use_embeddings:
+        return tfidf_matrix.tocsr()
 
-    if use_embeddings:
-        embedding_matrix = build_embedding_matrix(texts)
-        return hstack([tfidf_matrix, meta_matrix, embedding_matrix]).tocsr()
-
-    return hstack([tfidf_matrix, meta_matrix]).tocsr()
+    embedding_matrix = build_embedding_matrix(texts)
+    return hstack([tfidf_matrix, embedding_matrix]).tocsr()
