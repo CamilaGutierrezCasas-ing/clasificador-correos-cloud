@@ -64,6 +64,8 @@ def train_and_save_demo_model() -> None:
     joblib.dump(vectorizer, VECTORIZER_PATH)
     joblib.dump(feature_config, FEATURE_CONFIG_PATH)
 
+#el modelo no se realizo correctamente
+
 
 def ensure_model_artifacts() -> None:
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
