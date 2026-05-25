@@ -10,7 +10,7 @@ from app.models.linked_account import LinkedAccount
 from app.models.user import User
 from app.services.microsoft_graph_service import get_account_messages
 
-CONFIDENCE_THRESHOLD = 0.30
+CONFIDENCE_THRESHOLD = 0.15
 LOW_CONFIDENCE_STATS_THRESHOLD = 0.20
 
 

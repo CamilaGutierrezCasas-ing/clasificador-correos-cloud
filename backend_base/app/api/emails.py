@@ -36,7 +36,7 @@ from app.services.email_service import (
 
 router = APIRouter(prefix="/emails", tags=["Emails"])
 
-CONFIDENCE_THRESHOLD = 0.30
+CONFIDENCE_THRESHOLD = 0.15
 
 
 @router.post("/classify", response_model=EmailClassifyResponse, status_code=status.HTTP_201_CREATED)
