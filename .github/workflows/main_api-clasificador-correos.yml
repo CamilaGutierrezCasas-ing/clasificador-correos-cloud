@@ -71,4 +71,5 @@ jobs:
         with:
           app-name: 'api-clasificador-correos'
           slot-name: 'Production'
+          package: .
           
