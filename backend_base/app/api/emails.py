@@ -1,19 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.services.email_service import reclassify_all_emails
-
-
 from app.api.deps import get_current_user, require_roles
 from app.db.session import get_db
-from app.ml.classifier import MODEL_VERSION, classify_email
+from app.ml.classifier import MODEL_VERSION, classify_email, classify_emails_batch
 from app.models.linked_account import LinkedAccount
 from app.models.user import User
-from app.services.microsoft_graph_service import (
-    get_account_message_detail,
-    get_account_messages,
-    get_valid_microsoft_access_token,
-)
 from app.schemas.email import (
     EmailCategoryUpdate,
     EmailChatbotQuery,
@@ -30,8 +22,14 @@ from app.services.email_service import (
     list_user_emails,
     list_user_emails_by_account,
     list_user_emails_by_category,
+    reclassify_all_emails,
     sync_emails_from_microsoft_account,
     update_email_category,
+)
+from app.services.microsoft_graph_service import (
+    get_account_message_detail,
+    get_account_messages,
+    get_valid_microsoft_access_token,
 )
 
 router = APIRouter(prefix="/emails", tags=["Emails"])
@@ -39,7 +37,11 @@ router = APIRouter(prefix="/emails", tags=["Emails"])
 CONFIDENCE_THRESHOLD = 0.15
 
 
-@router.post("/classify", response_model=EmailClassifyResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/classify",
+    response_model=EmailClassifyResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 def classify_and_save_email(
     payload: EmailClassifyIn,
     db: Session = Depends(get_db),
@@ -60,6 +62,7 @@ def classify_and_save_email(
         predicted_category=category,
         confidence=confidence,
     )
+
     return EmailClassifyResponse(email=email, model_version=MODEL_VERSION)
 
 
@@ -103,6 +106,7 @@ def chatbot_query_endpoint(
         owner=current_user,
         user_query=payload.query,
     )
+
     return EmailChatbotResponse(**result)
 
 
@@ -168,8 +172,6 @@ def sync_my_microsoft_emails(
     }
 
 
-
-
 def _extract_sender_from_graph(message: dict) -> str:
     from_data = message.get("from") or {}
     email_address = from_data.get("emailAddress") or {}
@@ -187,6 +189,11 @@ def read_live_microsoft_emails(
     Consulta correos en vivo desde Microsoft Graph.
     No guarda subject, body ni sender en la tabla emails.
     Solo devuelve la información en la respuesta HTTP para mostrarla en pantalla.
+
+    Optimización:
+    - Antes clasificaba correo por correo.
+    - Ahora clasifica todos los correos en lote usando classify_emails_batch().
+    - Esto evita cargar/vectorizar el modelo repetidamente y mejora el tiempo de respuesta.
     """
     account = (
         db.query(LinkedAccount)
@@ -210,17 +217,37 @@ def read_live_microsoft_emails(
     except Exception as exc:
         raise HTTPException(
             status_code=502,
-            detail=f"No se pudieron consultar los correos en vivo desde Microsoft Graph: {str(exc)}",
+            detail=(
+                "No se pudieron consultar los correos en vivo desde "
+                f"Microsoft Graph: {str(exc)}"
+            ),
+        )
+
+    if not messages:
+        return []
+
+    items_to_classify = [
+        (
+            message.get("subject") or "Sin asunto",
+            message.get("bodyPreview") or "",
+        )
+        for message in messages
+    ]
+
+    try:
+        classifications = classify_emails_batch(items_to_classify)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"No se pudieron clasificar los correos en lote: {str(exc)}",
         )
 
     result = []
 
-    for message in messages:
+    for message, (category, confidence) in zip(messages, classifications):
         subject = message.get("subject") or "Sin asunto"
         body_preview = message.get("bodyPreview") or ""
         sender = _extract_sender_from_graph(message)
-
-        category, confidence = classify_email(subject, body_preview)
 
         if confidence < CONFIDENCE_THRESHOLD:
             category = "otros"
@@ -283,7 +310,10 @@ def read_live_microsoft_email_detail(
     except Exception as exc:
         raise HTTPException(
             status_code=502,
-            detail=f"No se pudo consultar el detalle del correo en vivo desde Microsoft Graph: {str(exc)}",
+            detail=(
+                "No se pudo consultar el detalle del correo en vivo desde "
+                f"Microsoft Graph: {str(exc)}"
+            ),
         )
 
     subject = live_detail.get("subject") or "Sin asunto"
@@ -326,7 +356,11 @@ def read_my_email_detail(
     # En la base de datos NO se guarda el contenido real del correo.
     # Si el correo viene de Microsoft, al abrir el detalle se consulta en vivo a Microsoft Graph
     # y se devuelve solo en la respuesta HTTP, sin hacer db.commit().
-    if email.is_synced_from_microsoft and email.linked_account_id and email.graph_message_id:
+    if (
+        email.is_synced_from_microsoft
+        and email.linked_account_id
+        and email.graph_message_id
+    ):
         account = (
             db.query(LinkedAccount)
             .filter(
@@ -339,8 +373,9 @@ def read_my_email_detail(
 
         if account:
             try:
+                access_token = get_valid_microsoft_access_token(db, account=account)
                 live_detail = get_account_message_detail(
-                    access_token=account.access_token,
+                    access_token=access_token,
                     message_id=email.graph_message_id,
                 )
 
@@ -358,11 +393,11 @@ def read_my_email_detail(
                     "received_at": email.received_at,
                 }
             except Exception:
-                # Si Microsoft Graph falla o el token expiró, devolvemos lo almacenado sin romper la vista.
+                # Si Microsoft Graph falla o el token expiró,
+                # devolvemos lo almacenado sin romper la vista.
                 return email
 
     return email
-
 
 
 @router.put("/{email_id}/category", response_model=EmailOut)

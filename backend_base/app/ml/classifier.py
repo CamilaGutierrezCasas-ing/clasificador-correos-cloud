@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import joblib
+from functools import lru_cache
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
@@ -78,6 +79,7 @@ def ensure_model_artifacts() -> None:
         joblib.dump({"use_embeddings": False}, FEATURE_CONFIG_PATH)
 
 
+@lru_cache(maxsize=1)
 def load_model_artifacts():
     ensure_model_artifacts()
     model = joblib.load(MODEL_PATH)
@@ -110,3 +112,32 @@ def classify_email(subject: str, body: str) -> tuple[str, float]:
         confidence = 0.0
 
     return prediction, round(confidence, 4)
+
+
+def classify_emails_batch(items: list[tuple[str, str]]) -> list[tuple[str, float]]:
+    model, vectorizer, feature_config = load_model_artifacts()
+
+    texts = [
+        preprocess_text(subject, body)
+        for subject, body in items
+    ]
+
+    X = build_hybrid_matrix(
+        texts,
+        vectorizer=vectorizer,
+        fit_vectorizer=False,
+        use_embeddings=feature_config.get("use_embeddings", False),
+    )
+
+    predictions = model.predict(X)
+
+    if hasattr(model, "predict_proba"):
+        probabilities = model.predict_proba(X)
+        confidences = probabilities.max(axis=1)
+    else:
+        confidences = [0.0] * len(predictions)
+
+    return [
+        (str(category), round(float(confidence), 4))
+        for category, confidence in zip(predictions, confidences)
+    ]
