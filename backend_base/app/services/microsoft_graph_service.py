@@ -221,7 +221,7 @@ def get_account_messages(*, access_token: str, top: int = 1000) -> list[dict[str
     url = (
         "https://graph.microsoft.com/v1.0/me/messages"
         "?$select=id,subject,bodyPreview,receivedDateTime,from"
-        "&$top=100"
+        "&$top=500"
         "&$orderby=receivedDateTime desc"
     )
 
