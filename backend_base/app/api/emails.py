@@ -181,7 +181,7 @@ def _extract_sender_from_graph(message: dict) -> str:
 @router.get("/live/account/{account_id}")
 def read_live_microsoft_emails(
     account_id: int,
-    top: int = Query(200, ge=1, le=500),
+    top: int = Query(500, ge=1, le=1000),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
