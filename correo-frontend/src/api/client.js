@@ -2,7 +2,9 @@ import axios from 'axios';
 import { storage } from '../utils/storage';
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1',
+  baseURL:
+    import.meta.env.VITE_API_URL ||
+    'https://api-clasificador-correos-fyhygqhrg9gch3fw.canadacentral-01.azurewebsites.net/api/v1',
 });
 
 api.interceptors.request.use((config) => {
