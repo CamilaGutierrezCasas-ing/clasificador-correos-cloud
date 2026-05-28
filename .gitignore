@@ -1,0 +1,7 @@
+node_modules/
+correo-frontend/node_modules/
+dist/
+correo-frontend/dist/
+.env
+.env.local
+.vercel/
