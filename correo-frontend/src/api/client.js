@@ -4,14 +4,16 @@ import { storage } from '../utils/storage';
 const api = axios.create({
   baseURL:
     import.meta.env.VITE_API_URL ||
-    'https://api-clasificador-correos-fyhygqhrg9gch3fw.canadacentral-01.azurewebsites.net/api/v1',
+     'https://api-clasificador-correos-fyhygqhrg9gch3fw.canadacentral-01.azurewebsites.net/api/v1',
 });
 
 api.interceptors.request.use((config) => {
-  const token = storage.getToken();
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+  
+    const token = localStorage.getItem('token');
+    if (token) {
+     config.headers.Authorization = `Bearer ${token}`;
   }
+
   return config;
 });
 
