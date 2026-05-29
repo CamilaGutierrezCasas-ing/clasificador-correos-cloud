@@ -9,6 +9,11 @@ from app.db.session import SessionLocal, engine
 from app.ml.classifier import ensure_model_artifacts
 from app.services.seed_service import seed_default_admin, seed_roles
 
+from pathlib import Path
+from fastapi import HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
 settings = get_settings()
 
 
@@ -51,3 +56,32 @@ def root() -> dict:
         "docs": "/docs",
         "api_prefix": settings.api_v1_str,
     }
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+if STATIC_DIR.exists():
+    assets_dir = STATIC_DIR / "assets"
+
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    async def serve_frontend_root():
+        return FileResponse(STATIC_DIR / "index.html")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_react_app(full_path: str):
+        if (
+            full_path.startswith("api/")
+            or full_path.startswith("docs")
+            or full_path.startswith("openapi.json")
+            or full_path.startswith("redoc")
+        ):
+            raise HTTPException(status_code=404, detail="Not found")
+
+        requested_file = STATIC_DIR / full_path
+
+        if requested_file.is_file():
+            return FileResponse(requested_file)
+
+        return FileResponse(STATIC_DIR / "index.html")
