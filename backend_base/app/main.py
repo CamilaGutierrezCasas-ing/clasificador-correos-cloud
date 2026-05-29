@@ -49,13 +49,13 @@ app.add_middleware(
 app.include_router(api_router, prefix=settings.api_v1_str)
 
 
-@app.get("/", tags=["Root"])
-def root() -> dict:
-    return {
-        "message": "Backend fase 3 corriendo con auth y clasificación de correos.",
-        "docs": "/docs",
-        "api_prefix": settings.api_v1_str,
-    }
+#@app.get("/", tags=["Root"])
+#def root() -> dict:
+#    return {
+#        "message": "Backend fase 3 corriendo con auth y clasificación de correos.",
+#        "docs": "/docs",
+#        "api_prefix": settings.api_v1_str,
+#    }
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
