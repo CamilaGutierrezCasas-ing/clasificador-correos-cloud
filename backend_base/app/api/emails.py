@@ -103,7 +103,7 @@ def _find_saved_live_email(
     return (
         db.query(Email)
         .filter(
-            Email.user_id == current_user.id,
+            Email.owner_user_id == current_user.id,
             Email.linked_account_id == account_id,
             Email.graph_message_id == graph_message_id,
         )
@@ -359,7 +359,7 @@ def read_live_microsoft_emails(
         saved_emails = (
             db.query(Email)
             .filter(
-                Email.user_id == current_user.id,
+                Email.owner_user_id == current_user.id,
                 Email.linked_account_id == account.id,
                 Email.graph_message_id.in_(graph_ids),
             )
