@@ -425,6 +425,30 @@ def get_advanced_statistics(db: Session, *, owner: User) -> dict:
     return build_statistics_from_emails(emails)
 
 
+
+def build_user_label_map(db: Session, user_ids: set[int]) -> dict[int, str]:
+    """Devuelve etiquetas legibles para el panel administrativo."""
+    if not user_ids:
+        return {}
+
+    users = db.query(User).filter(User.id.in_(user_ids)).all()
+    labels: dict[int, str] = {}
+
+    for user in users:
+        name = (user.name or "").strip()
+        email = (user.email or "").strip()
+
+        if name and email:
+            labels[user.id] = f"{name} ({email})"
+        elif name:
+            labels[user.id] = name
+        elif email:
+            labels[user.id] = email
+        else:
+            labels[user.id] = f"Usuario #{user.id}"
+
+    return labels
+
 def get_global_advanced_statistics(db: Session) -> dict:
     emails = (
         db.query(Email)
@@ -438,10 +462,21 @@ def get_global_advanced_statistics(db: Session) -> dict:
         )
         .all()
     )
-    return build_statistics_from_emails(emails, include_global_breakdowns=True)
+    user_ids = {e.owner_user_id for e in emails if e.owner_user_id is not None}
+    user_labels = build_user_label_map(db, user_ids)
+
+    return build_statistics_from_emails(
+        emails,
+        include_global_breakdowns=True,
+        user_labels=user_labels,
+    )
 
 
-def build_statistics_from_emails(emails: list[Email], include_global_breakdowns: bool = False) -> dict:
+def build_statistics_from_emails(
+    emails: list[Email],
+    include_global_breakdowns: bool = False,
+    user_labels: dict[int, str] | None = None,
+) -> dict:
     total = len(emails)
 
     empty = {
@@ -482,9 +517,17 @@ def build_statistics_from_emails(emails: list[Email], include_global_breakdowns:
 
     if include_global_breakdowns:
         accounts = [e.source_account for e in emails if e.source_account]
-        users = [e.owner_user_id for e in emails if e.owner_user_id is not None]
+        user_values = []
+        labels = user_labels or {}
+
+        for e in emails:
+            if e.owner_user_id is None:
+                continue
+
+            user_values.append(labels.get(e.owner_user_id, f"Usuario #{e.owner_user_id}"))
+
         result["by_account"] = dict(Counter(accounts))
-        result["by_user"] = dict(Counter(users))
+        result["by_user"] = dict(Counter(user_values))
 
     return result
 

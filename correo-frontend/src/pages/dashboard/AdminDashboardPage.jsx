@@ -7,12 +7,12 @@ import Button from '../../components/common/Button';
 import { getAdvancedStats, retrainModel, reclassifyAllEmails } from '../../api/emailApi';
 
 
-function StatItem({ label, value, color = 'default' }) {
+function StatItem({ label, value, color = 'default', badge }) {
   return (
     <div className="rounded-2xl border border-brand-blueSoft/15 bg-white p-4 shadow-soft">
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm font-medium text-slate-500">{label}</p>
-        <Badge color={color}>{label}</Badge>
+        <Badge color={color}>{badge || label}</Badge>
       </div>
       <p className="mt-4 text-3xl font-bold text-brand-blueDark">{value}</p>
     </div>
@@ -26,6 +26,25 @@ const CATEGORY_LABELS = {
   spam: 'Spam',
   urgente: 'Urgente',
   educacion: 'Educación',
+};
+
+const formatPercent = (value) => `${Number(value || 0).toFixed(1)}%`;
+
+const formatConfidencePercent = (value) => {
+  const numericValue = Number(value || 0);
+  return `${(numericValue * 100).toFixed(1)}%`;
+};
+
+const formatUserLabel = (key) => {
+  const text = String(key || '').trim();
+  if (!text) return 'Usuario sin identificar';
+  if (/^\d+$/.test(text)) return `Usuario #${text}`;
+  return text;
+};
+
+const formatAccountLabel = (key) => {
+  const text = String(key || '').trim();
+  return text || 'Cuenta Microsoft sin identificar';
 };
 
 
@@ -119,7 +138,15 @@ function MetricsExplanation({ result }) {
   );
 }
 
-function SimpleBarList({ title, subtitle, data, scale = 'total' }) {
+function SimpleBarList({
+  title,
+  subtitle,
+  data,
+  scale = 'total',
+  itemLabelFormatter = (key) => CATEGORY_LABELS[key] || key,
+  totalLabel = 'Total analizado',
+  totalSuffix = 'muestras',
+}) {
   const entries = Object.entries(data || {}).sort(
     ([, a], [, b]) => Number(b) - Number(a)
   );
@@ -142,10 +169,10 @@ function SimpleBarList({ title, subtitle, data, scale = 'total' }) {
         <div className="space-y-4">
           <div className="rounded-2xl bg-brand-cream px-4 py-3">
             <p className="text-sm font-medium text-slate-500">
-              Total analizado
+              {totalLabel}
             </p>
             <p className="text-2xl font-bold text-brand-blueDark">
-              {total.toLocaleString('es-CO')} muestras
+              {total.toLocaleString('es-CO')} {totalSuffix}
             </p>
           </div>
 
@@ -162,7 +189,7 @@ function SimpleBarList({ title, subtitle, data, scale = 'total' }) {
               >
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <span className="truncate text-sm font-semibold text-brand-blueDark">
-                    {CATEGORY_LABELS[key] || key}
+                    {itemLabelFormatter(key)}
                   </span>
 
                   <span className="text-sm font-bold text-brand-blueDark">
@@ -436,10 +463,30 @@ export default function AdminDashboardPage() {
           </Card>
 
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <StatItem label="Total correos" value={stats?.total_emails ?? 0} color="blue" />
-            <StatItem label="Confianza promedio" value={stats?.average_confidence ?? 0} color="green" />
-            <StatItem label="Baja confianza" value={stats?.low_confidence_count ?? 0} color="amber" />
-            <StatItem label="Correcciones" value={stats?.manual_corrections ?? 0} color="red" />
+            <StatItem
+              label="Correos analizados"
+              value={(stats?.total_emails ?? 0).toLocaleString('es-CO')}
+              color="blue"
+              badge="Metadatos"
+            />
+            <StatItem
+              label="Score promedio del modelo"
+              value={formatConfidencePercent(stats?.average_confidence)}
+              color="green"
+              badge="Confianza"
+            />
+            <StatItem
+              label="Revisión sugerida"
+              value={(stats?.low_confidence_count ?? 0).toLocaleString('es-CO')}
+              color="amber"
+              badge="Baja confianza"
+            />
+            <StatItem
+              label="Correcciones manuales"
+              value={(stats?.manual_corrections ?? 0).toLocaleString('es-CO')}
+              color="red"
+              badge="Correcciones"
+            />
           </div>
 
           <div className="grid gap-6 xl:grid-cols-2">
@@ -447,7 +494,7 @@ export default function AdminDashboardPage() {
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="rounded-2xl bg-brand-cream p-4">
                   <p className="text-sm font-medium text-slate-500">
-                    Porcentaje de baja confianza
+                    Porcentaje para revisión
                   </p>
                   <p className="mt-2 text-2xl font-bold text-brand-blueDark">
                     {lowConfidencePercent}%
@@ -456,7 +503,7 @@ export default function AdminDashboardPage() {
 
                 <div className="rounded-2xl bg-brand-cream p-4">
                   <p className="text-sm font-medium text-slate-500">
-                    Porcentaje de corrección manual
+                    Porcentaje corregido manualmente
                   </p>
                   <p className="mt-2 text-2xl font-bold text-brand-blueDark">
                     {manualCorrectionPercent}%
@@ -467,7 +514,7 @@ export default function AdminDashboardPage() {
 
             <SimpleBarList
               title="Correos por categoría"
-              subtitle="Distribución general de correos clasificados por el sistema."
+              subtitle="Distribución general según la categoría final asignada por el sistema o por corrección manual."
               data={stats?.by_category || {}}
               scale="total"
             />
@@ -475,14 +522,22 @@ export default function AdminDashboardPage() {
 
           <div className="grid gap-6 xl:grid-cols-2">
             <SimpleBarList
-              title="Correos por cuenta Microsoft"
+              title="Cuentas Microsoft analizadas"
+              subtitle="Cantidad de correos analizados por cada cuenta vinculada. Solo se guardan metadatos técnicos, no el contenido del correo."
               data={stats?.by_account || {}}
               scale="total"
+              itemLabelFormatter={formatAccountLabel}
+              totalLabel="Correos analizados entre cuentas"
+              totalSuffix="correos"
             />
             <SimpleBarList
-              title="Correos por usuario"
+              title="Usuarios con correos analizados"
+              subtitle="Distribución de correos procesados por cada usuario registrado en el sistema."
               data={stats?.by_user || {}}
               scale="total"
+              itemLabelFormatter={formatUserLabel}
+              totalLabel="Correos analizados entre usuarios"
+              totalSuffix="correos"
             />
           </div>
 
