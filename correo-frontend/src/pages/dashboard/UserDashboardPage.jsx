@@ -70,9 +70,12 @@ export default function UserDashboardPage() {
     await loadAccounts();
 
     if (isLiveMode) {
-      setLiveEmails([]);
-      setEmails([]);
-      setIsLiveMode(false);
+      const remaining = liveEmails.filter(
+        (email) => email.linked_account_id !== accountId
+      );
+      setLiveEmails(remaining);
+      setEmails(applyCategoryFilter(remaining, selectedCategory));
+      setIsLiveMode(remaining.length > 0);
     }
   };
 
@@ -81,15 +84,43 @@ export default function UserDashboardPage() {
     return items.filter((email) => email.predicted_category === category);
   };
 
+  const getEmailKey = (email) => {
+    if (email?.linked_account_id && email?.graph_message_id) {
+      return `${email.linked_account_id}-${email.graph_message_id}`;
+    }
+
+    return String(email?.id || '');
+  };
+
+  const mergeLiveEmails = (currentItems, newItems) => {
+    const merged = new Map();
+
+    currentItems.forEach((email) => {
+      merged.set(getEmailKey(email), email);
+    });
+
+    newItems.forEach((email) => {
+      const key = getEmailKey(email);
+      const previous = merged.get(key);
+      merged.set(key, previous ? { ...previous, ...email } : email);
+    });
+
+    return Array.from(merged.values());
+  };
+
   const handleSync = async (accountId) => {
     setLoadingEmails(true);
-    setSelectedCategory('todos');
 
     try {
       const data = await getLiveEmailsByAccount(accountId, PER_ACCOUNT_LIMIT);
-      setLiveEmails(data);
-      setEmails(data);
+
       setIsLiveMode(true);
+
+      setLiveEmails((prev) => {
+        const merged = mergeLiveEmails(prev, data);
+        setEmails(applyCategoryFilter(merged, selectedCategory));
+        return merged;
+      });
     } finally {
       setLoadingEmails(false);
     }
@@ -218,9 +249,7 @@ export default function UserDashboardPage() {
 
       {isLiveMode && (
         <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-          Estás viendo correos en vivo desde Microsoft Graph. Si corriges una
-          categoría, se guardará solo el asunto y la categoría corregida para
-          proteger la privacidad del contenido.
+          Estás viendo correos en vivo desde Microsoft Graph. Cada cuenta sincronizada se suma a la vista general. El contenido se muestra temporalmente y no se guarda en la base de datos.
         </div>
       )}
 
