@@ -20,6 +20,8 @@ import EmailDetailModal from '../../components/dashboard/EmailDetailModal';
 import ChatbotWidget from '../../components/dashboard/ChatbotWidget';
 import { useAuth } from '../../hooks/useAuth';
 
+const PER_ACCOUNT_LIMIT = 1000;
+
 export default function UserDashboardPage() {
   const { user } = useAuth();
   const [accounts, setAccounts] = useState([]);
@@ -67,7 +69,6 @@ export default function UserDashboardPage() {
     await disconnectMicrosoftAccount(accountId);
     await loadAccounts();
 
-    // Si se desconecta una cuenta, limpiamos la vista en vivo.
     if (isLiveMode) {
       setLiveEmails([]);
       setEmails([]);
@@ -75,32 +76,24 @@ export default function UserDashboardPage() {
     }
   };
 
-  // IMPORTANTE:
-  // Este botón antes sincronizaba y guardaba correos en la BD.
-  // Ahora carga correos EN VIVO desde Microsoft Graph y NO guarda subject/body/sender reales.
+  const applyCategoryFilter = (items, category) => {
+    if (category === 'todos') return items;
+    return items.filter((email) => email.predicted_category === category);
+  };
+
   const handleSync = async (accountId) => {
     setLoadingEmails(true);
     setSelectedCategory('todos');
 
-     try {
-    const PER_ACCOUNT_LIMIT = 1000;
-    const activeAccounts = accounts.filter((account) => account.is_active);
-
-    const responses = await Promise.all(
-      activeAccounts.map((account) =>
-        getLiveEmailsByAccount(account.id, PER_ACCOUNT_LIMIT)
-      )
-    );
-
-      const allEmails = responses.flat();
-
-      setLiveEmails(allEmails);
-      setEmails(allEmails);
+    try {
+      const data = await getLiveEmailsByAccount(accountId, PER_ACCOUNT_LIMIT);
+      setLiveEmails(data);
+      setEmails(data);
       setIsLiveMode(true);
     } finally {
       setLoadingEmails(false);
     }
- };
+  };
 
   const handleCategoryFilter = async (category) => {
     setSelectedCategory(category);
@@ -108,19 +101,12 @@ export default function UserDashboardPage() {
 
     try {
       if (isLiveMode) {
-        const filtered =
-          category === 'todos'
-            ? liveEmails
-            : liveEmails.filter((email) => email.predicted_category === category);
-
-        setEmails(filtered);
+        setEmails(applyCategoryFilter(liveEmails, category));
         return;
       }
 
       const data =
-        category === 'todos'
-          ? await getMyEmails()
-          : await getEmailsByCategory(category);
+        category === 'todos' ? await getMyEmails() : await getEmailsByCategory(category);
       setEmails(data);
     } finally {
       setLoadingEmails(false);
@@ -128,8 +114,6 @@ export default function UserDashboardPage() {
   };
 
   const handleViewDetail = async (email) => {
-    // Primero abrimos el modal con lo que ya está en la tabla
-    // para que la interfaz responda rápido.
     setSelectedEmail(email);
 
     try {
@@ -154,10 +138,37 @@ export default function UserDashboardPage() {
     }
   };
 
+  const sameEmail = (item, updatedEmail) => {
+    if (item.id === updatedEmail.id) return true;
+
+    return (
+      item.graph_message_id &&
+      updatedEmail.graph_message_id &&
+      item.graph_message_id === updatedEmail.graph_message_id &&
+      item.linked_account_id === updatedEmail.linked_account_id
+    );
+  };
+
   const handleEmailUpdated = (updatedEmail) => {
-    // Las correcciones solo aplican para correos guardados en BD.
-    // En modo en vivo no persistimos el contenido ni las correcciones.
-    if (updatedEmail?.is_live) {
+    if (!updatedEmail) return;
+
+    if (updatedEmail.is_live) {
+      setLiveEmails((prev) => {
+        const updatedLiveEmails = prev.map((item) =>
+          sameEmail(item, updatedEmail)
+            ? {
+                ...item,
+                ...updatedEmail,
+                id: item.id,
+                is_live: true,
+              }
+            : item
+        );
+
+        setEmails(applyCategoryFilter(updatedLiveEmails, selectedCategory));
+        return updatedLiveEmails;
+      });
+
       setSelectedEmail(updatedEmail);
       return;
     }
@@ -207,15 +218,14 @@ export default function UserDashboardPage() {
 
       {isLiveMode && (
         <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-          Estás viendo correos en vivo desde Microsoft Graph. El asunto y el contenido se muestran temporalmente y no se guardan en la base de datos.
+          Estás viendo correos en vivo desde Microsoft Graph. Si corriges una
+          categoría, se guardará solo el asunto y la categoría corregida para
+          proteger la privacidad del contenido.
         </div>
       )}
 
       <div className="grid gap-6 lg:grid-cols-[220px_1fr]">
-        <EmailCategoriesSidebar
-          selected={selectedCategory}
-          onSelect={handleCategoryFilter}
-        />
+        <EmailCategoriesSidebar selected={selectedCategory} onSelect={handleCategoryFilter} />
 
         {loadingEmails ? (
           <p className="text-sm text-slate-500">Cargando correos...</p>

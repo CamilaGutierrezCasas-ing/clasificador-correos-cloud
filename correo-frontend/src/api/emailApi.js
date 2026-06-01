@@ -30,6 +30,24 @@ export const updateEmailCategory = async (emailId, category) => {
   return data;
 };
 
+export const updateLiveEmailCategory = async ({
+  accountId,
+  messageId,
+  subject,
+  sender,
+  category,
+}) => {
+  const { data } = await api.put('/emails/live/category', {
+    account_id: accountId,
+    message_id: messageId,
+    subject,
+    sender,
+    category,
+  });
+
+  return data;
+};
+
 export const getAdvancedStats = async () => {
   const { data } = await api.get('/emails/stats/advanced');
   return data;
@@ -55,7 +73,7 @@ export const reclassifyAllEmails = async () => {
   return data;
 };
 
-export async function getLiveEmailsByAccount(accountId, top = 50) {
+export async function getLiveEmailsByAccount(accountId, top = 1000) {
   const { data } = await api.get(`/emails/live/account/${accountId}`, {
     params: { top },
   });
