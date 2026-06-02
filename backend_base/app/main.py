@@ -7,7 +7,7 @@ from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
 from app.ml.classifier import ensure_model_artifacts
-from app.services.seed_service import seed_default_admin, seed_roles
+from app.services.seed_service import seed_default_admin, seed_default_secretary, seed_roles
 
 from pathlib import Path
 from fastapi import HTTPException
@@ -25,6 +25,7 @@ async def lifespan(_: FastAPI):
     try:
         seed_roles(db)
         seed_default_admin(db)
+        seed_default_secretary(db)
     finally:
         db.close()
     yield

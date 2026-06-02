@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     default_admin_email: str = "admin@local.com"
     default_admin_password: str = "Admin123*"
 
+    default_secretary_name: str = "Secretaria"
+    default_secretary_email: str = "secretaria@correo.com"
+    default_secretary_password: str = "Secretaria123*"
 
     microsoft_client_id: str = ""
     microsoft_client_secret: str = ""

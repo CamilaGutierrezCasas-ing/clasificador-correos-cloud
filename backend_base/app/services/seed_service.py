@@ -24,3 +24,13 @@ def seed_default_admin(db: Session) -> None:
             password=settings.default_admin_password,
             role_name="admin",
         )
+
+def seed_default_secretary(db: Session) -> None:
+    if not get_user_by_email(db, settings.default_secretary_email):
+        create_user(
+            db,
+            name=settings.default_secretary_name,
+            email=settings.default_secretary_email,
+            password=settings.default_secretary_password,
+            role_name="secretaria",
+        )
