@@ -1,16 +1,14 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode, quote
-import secrets
 import html
 import re
+import secrets
+import time
 
 import httpx
 from jose import jwt
 from sqlalchemy.orm import Session
-import httpx
-from typing import Any
-
 
 from app.core.config import get_settings
 from app.core.security import decode_token
@@ -142,13 +140,7 @@ def upsert_linked_account(
     return account
 
 
-
-
 def refresh_microsoft_access_token(*, refresh_token: str) -> dict[str, Any]:
-    """
-    Renueva el access_token usando el refresh_token.
-    Esto permite consultar correos en vivo aunque el token inicial ya haya expirado.
-    """
     token_url = f"https://login.microsoftonline.com/{settings.microsoft_tenant_id}/oauth2/v2.0/token"
 
     payload = {
@@ -171,18 +163,12 @@ def refresh_microsoft_access_token(*, refresh_token: str) -> dict[str, Any]:
 
 
 def get_valid_microsoft_access_token(db: Session, *, account: LinkedAccount) -> str:
-    """
-    Devuelve un access_token válido.
-    Si está próximo a vencer, lo renueva con refresh_token y actualiza SOLO los tokens,
-    no el contenido de correos.
-    """
     now = datetime.now(timezone.utc)
     expires_at = account.token_expires_at
 
     if expires_at and expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
 
-    # Si el token todavía sirve por más de 5 minutos, úsalo.
     if account.access_token and expires_at and expires_at > now + timedelta(minutes=5):
         return account.access_token
 
@@ -210,44 +196,78 @@ def list_user_linked_accounts(db: Session, *, user_id: int) -> list[LinkedAccoun
         .order_by(LinkedAccount.created_at.desc())
         .all()
     )
+
+
+def _graph_get_with_retry(client: httpx.Client, url: str, *, access_token: str) -> httpx.Response:
+    """
+    Reintenta errores temporales de Microsoft Graph.
+
+    Ayuda a reducir falsos fallos cuando Graph responde 429, 503 o 504.
+    """
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Prefer": 'outlook.body-content-type="text"',
+    }
+
+    last_response: httpx.Response | None = None
+    for attempt in range(3):
+        response = client.get(url, headers=headers)
+        last_response = response
+
+        if response.status_code not in {429, 500, 502, 503, 504}:
+            return response
+
+        retry_after = response.headers.get("Retry-After")
+        if retry_after and retry_after.isdigit():
+            wait_seconds = min(int(retry_after), 8)
+        else:
+            wait_seconds = 1 + attempt * 2
+
+        time.sleep(wait_seconds)
+
+    if last_response is None:
+        raise RuntimeError("No se recibió respuesta de Microsoft Graph")
+
+    return last_response
+
+
 def get_account_messages(*, access_token: str, top: int = 1000) -> list[dict[str, Any]]:
     """
-    Obtiene correos desde Microsoft Graph usando paginación.
-    Trae hasta 'top' correos en total.
-    """
+    Obtiene correos desde Microsoft Graph usando menos páginas.
 
+    Antes se pedían páginas de 50 correos. Para 1000 correos eso podía hacer
+    hasta 20 llamadas por cuenta. Ahora se usa un page size alto para reducir
+    viajes a Microsoft Graph y acelerar la sincronización.
+    """
+    top = max(1, min(int(top or 1000), 1000))
+    page_size = min(top, 1000)
     messages: list[dict[str, Any]] = []
 
-    url = (
-        "https://graph.microsoft.com/v1.0/me/messages"
-        "?$select=id,subject,bodyPreview,receivedDateTime,from"
-        "&$top=500"
-        "&$orderby=receivedDateTime desc"
+    query = urlencode(
+        {
+            "$select": "id,subject,bodyPreview,receivedDateTime,from",
+            "$top": str(page_size),
+            "$orderby": "receivedDateTime desc",
+        }
     )
+    url = f"https://graph.microsoft.com/v1.0/me/messages?{query}"
 
-    with httpx.Client(timeout=60.0) as client:
+    timeout = httpx.Timeout(90.0, connect=10.0, read=80.0)
+    with httpx.Client(timeout=timeout) as client:
         while url and len(messages) < top:
-            response = client.get(
-                url,
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                },
-            )
-
+            response = _graph_get_with_retry(client, url, access_token=access_token)
             response.raise_for_status()
 
             data = response.json()
             batch = data.get("value", [])
-
             remaining = top - len(messages)
             messages.extend(batch[:remaining])
-
             url = data.get("@odata.nextLink")
 
     return messages
 
+
 def html_to_plain_text(value: str) -> str:
-    """Convierte HTML simple de Microsoft Graph a texto legible para mostrarlo sin guardarlo."""
     value = value or ""
     value = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", value)
     value = re.sub(r"(?i)<br\s*/?>", "\n", value)
@@ -259,10 +279,6 @@ def html_to_plain_text(value: str) -> str:
 
 
 def get_account_message_detail(*, access_token: str, message_id: str) -> dict[str, Any]:
-    """
-    Obtiene el detalle de un correo directamente desde Microsoft Graph.
-    Importante: esta función solo devuelve el contenido para mostrarlo; no lo guarda en BD.
-    """
     safe_message_id = quote(message_id, safe="")
     url = (
         f"https://graph.microsoft.com/v1.0/me/messages/{safe_message_id}"
@@ -272,7 +288,10 @@ def get_account_message_detail(*, access_token: str, message_id: str) -> dict[st
     with httpx.Client(timeout=60.0) as client:
         response = client.get(
             url,
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Prefer": 'outlook.body-content-type="text"',
+            },
         )
         response.raise_for_status()
         data = response.json()

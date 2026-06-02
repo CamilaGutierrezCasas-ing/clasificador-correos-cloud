@@ -131,19 +131,38 @@ export default function UserDashboardPage() {
     setSyncError('');
 
     try {
+      const results = await Promise.allSettled(
+        activeAccounts.map(async (account) => {
+          const data = await getLiveEmailsByAccount(account.id, PER_ACCOUNT_LIMIT);
+          return { account, data };
+        })
+      );
+
       let merged = liveEmails;
       let totalLoaded = 0;
+      const failedAccounts = [];
 
-      for (const account of activeAccounts) {
-        const data = await getLiveEmailsByAccount(account.id, PER_ACCOUNT_LIMIT);
-        totalLoaded += data.length;
-        merged = mergeAccountLiveEmails(merged, account.id, data);
-      }
+      results.forEach((result) => {
+        if (result.status === 'fulfilled') {
+          const { account, data } = result.value;
+          totalLoaded += data.length;
+          merged = mergeAccountLiveEmails(merged, account.id, data);
+        } else {
+          failedAccounts.push(result.reason);
+        }
+      });
 
       setLiveEmails(merged);
       setEmails(applyCategoryFilter(merged, selectedCategory));
+
+      if (failedAccounts.length > 0) {
+        setSyncError(
+          `${failedAccounts.length} cuenta(s) no se pudieron sincronizar. Las demás se cargaron correctamente.`
+        );
+      }
+
       setSyncMessage(
-        `Sincronización en vivo completada. Se consultaron ${totalLoaded} correos de ${activeAccounts.length} cuenta(s).`
+        `Sincronización en vivo completada. Se consultaron ${totalLoaded} correos de ${activeAccounts.length - failedAccounts.length} cuenta(s).`
       );
     } catch (error) {
       console.error('No se pudieron sincronizar todas las cuentas:', error);

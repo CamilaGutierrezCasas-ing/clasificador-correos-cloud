@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 import joblib
-from functools import lru_cache
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
@@ -64,23 +64,27 @@ def train_and_save_demo_model() -> None:
     joblib.dump(model, MODEL_PATH)
     joblib.dump(vectorizer, VECTORIZER_PATH)
     joblib.dump(feature_config, FEATURE_CONFIG_PATH)
-
-#el modelo no se realizo correctamente
+    clear_model_cache()
 
 
 def ensure_model_artifacts() -> None:
-    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-
-    if not MODEL_PATH.exists() or not VECTORIZER_PATH.exists():
+    if (
+        not MODEL_PATH.exists()
+        or not VECTORIZER_PATH.exists()
+        or not FEATURE_CONFIG_PATH.exists()
+    ):
         train_and_save_demo_model()
-        return
-
-    if not FEATURE_CONFIG_PATH.exists():
-        joblib.dump({"use_embeddings": False}, FEATURE_CONFIG_PATH)
 
 
 @lru_cache(maxsize=1)
-def load_model_artifacts():
+def _load_model_artifacts_cached():
+    """
+    Carga modelo/vectorizador una sola vez por proceso.
+
+    Antes se cargaban los archivos joblib en cada correo. Con 1000 correos por
+    cuenta eso hacía 1000 lecturas de disco y era una de las principales causas
+    de lentitud.
+    """
     ensure_model_artifacts()
     model = joblib.load(MODEL_PATH)
     vectorizer = joblib.load(VECTORIZER_PATH)
@@ -93,34 +97,27 @@ def load_model_artifacts():
     return model, vectorizer, feature_config
 
 
-def classify_email(subject: str, body: str) -> tuple[str, float]:
+def load_model_artifacts():
+    return _load_model_artifacts_cached()
+
+
+def clear_model_cache() -> None:
+    """Limpia caché después de reentrenar para usar el modelo nuevo."""
+    _load_model_artifacts_cached.cache_clear()
+
+
+def classify_emails_batch(email_pairs: list[tuple[str, str]]) -> list[tuple[str, float]]:
+    """
+    Clasifica muchos correos en una sola llamada.
+
+    Entrada: [(subject, body_preview), ...]
+    Salida: [(category, confidence), ...]
+    """
+    if not email_pairs:
+        return []
+
     model, vectorizer, feature_config = load_model_artifacts()
-    text = preprocess_text(subject, body)
-
-    X = build_hybrid_matrix(
-        [text],
-        vectorizer=vectorizer,
-        fit_vectorizer=False,
-        use_embeddings=feature_config.get("use_embeddings", False),
-    )
-
-    prediction = model.predict(X)[0]
-
-    if hasattr(model, "predict_proba"):
-        confidence = float(max(model.predict_proba(X)[0]))
-    else:
-        confidence = 0.0
-
-    return prediction, round(confidence, 4)
-
-
-def classify_emails_batch(items: list[tuple[str, str]]) -> list[tuple[str, float]]:
-    model, vectorizer, feature_config = load_model_artifacts()
-
-    texts = [
-        preprocess_text(subject, body)
-        for subject, body in items
-    ]
+    texts = [preprocess_text(subject, body) for subject, body in email_pairs]
 
     X = build_hybrid_matrix(
         texts,
@@ -133,11 +130,18 @@ def classify_emails_batch(items: list[tuple[str, str]]) -> list[tuple[str, float
 
     if hasattr(model, "predict_proba"):
         probabilities = model.predict_proba(X)
-        confidences = probabilities.max(axis=1)
+        confidences = [float(max(row)) for row in probabilities]
     else:
-        confidences = [0.0] * len(predictions)
+        confidences = [0.0 for _ in predictions]
 
     return [
         (str(category), round(float(confidence), 4))
         for category, confidence in zip(predictions, confidences)
     ]
+
+
+def classify_email(subject: str, body: str) -> tuple[str, float]:
+    result = classify_emails_batch([(subject, body)])
+    if not result:
+        return "otros", 0.0
+    return result[0]

@@ -4,7 +4,7 @@ from collections import Counter, defaultdict
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.ml.classifier import classify_email
+from app.ml.classifier import classify_email, classify_emails_batch
 from app.models.email import Email
 from app.models.linked_account import LinkedAccount
 from app.models.user import User
@@ -17,17 +17,13 @@ from app.services.microsoft_graph_service import (
 CONFIDENCE_THRESHOLD = 0.30
 LOW_CONFIDENCE_STATS_THRESHOLD = 0.20
 
-# Privacidad por diseño: estos valores se guardan en BD en lugar del contenido real.
+# Privacidad por diseño: se guarda esto en BD en lugar del contenido real.
 PRIVACY_SUBJECT_PLACEHOLDER = "[Contenido no almacenado por privacidad]"
 PRIVACY_BODY_PLACEHOLDER = ""
 PRIVACY_SENDER_PLACEHOLDER = "[Remitente no almacenado]"
 
 
 def mask_email_address(value: str) -> str:
-    """
-    Evita guardar el correo completo del remitente.
-    Conserva solo el dominio para análisis básico, por ejemplo: *@empresa.com.
-    """
     value = (value or "").strip()
     if "@" not in value:
         return PRIVACY_SENDER_PLACEHOLDER
@@ -68,11 +64,7 @@ def create_classified_email(
     received_at: datetime | None = None,
     store_content: bool = False,
 ) -> Email:
-    """
-    Crea un correo clasificado.
-
-    Por defecto NO guarda subject/body/sender reales. Solo guarda placeholders/metadatos.
-    """
+    """Crea un correo clasificado. Por defecto NO guarda contenido real."""
     original_subject = (subject or "").strip()
     original_body = (body or "").strip()
     original_sender = (sender or "desconocido").strip()
@@ -138,66 +130,114 @@ def upsert_microsoft_email_metadata(
     confidence: float,
     received_at: datetime | None = None,
 ) -> Email:
-    """
-    Guarda o actualiza SOLO metadatos del correo de Microsoft Graph.
-
-    NO guarda subject.
-    NO guarda body.
-    NO guarda bodyPreview.
-    NO guarda remitente real.
-
-    Si el usuario ya corrigió la categoría, se conserva la categoría corregida.
-    """
-    predicted_category = normalize_category(predicted_category)
-
-    email = get_email_by_graph_message_id(
+    """Upsert unitario para detalle/corrección. No guarda contenido real."""
+    result = upsert_microsoft_email_metadata_bulk(
         db,
-        graph_message_id=graph_message_id,
-        owner_user_id=owner.id,
-        linked_account_id=account.id,
+        owner=owner,
+        account=account,
+        items=[
+            {
+                "graph_message_id": graph_message_id,
+                "predicted_category": predicted_category,
+                "confidence": confidence,
+                "received_at": received_at,
+            }
+        ],
     )
+    return result[graph_message_id]
 
-    if email:
-        # Mantener el registro actualizado sin borrar correcciones manuales.
-        email.source_account = account.account_email
-        email.is_synced_from_microsoft = True
-        email.linked_account_id = account.id
-        if received_at:
-            email.received_at = received_at
 
-        if not email.was_corrected:
-            email.original_category = predicted_category
-            email.predicted_category = predicted_category
-            email.confidence = float(confidence or 0.0)
+def upsert_microsoft_email_metadata_bulk(
+    db: Session,
+    *,
+    owner: User,
+    account: LinkedAccount,
+    items: list[dict],
+) -> dict[str, Email]:
+    """
+    Guarda/actualiza metadatos en lote con un solo commit.
 
-        # Reforzar privacidad por si algún registro antiguo tenía contenido real.
-        email.subject = PRIVACY_SUBJECT_PLACEHOLDER
-        email.body = PRIVACY_BODY_PLACEHOLDER
-        email.sender = PRIVACY_SENDER_PLACEHOLDER
+    Esta es la optimización clave de BD: antes se hacía commit por cada correo.
+    Con 1000 correos eran 1000 transacciones. Ahora se hace una consulta de
+    existentes y un commit final.
+    """
+    cleaned_items: list[dict] = []
+    seen_ids: set[str] = set()
 
-        db.commit()
-        db.refresh(email)
-        return email
+    for item in items:
+        graph_message_id = item.get("graph_message_id")
+        if not graph_message_id or graph_message_id in seen_ids:
+            continue
+        seen_ids.add(graph_message_id)
+        cleaned_items.append(item)
 
-    email = Email(
-        owner_user_id=owner.id,
-        linked_account_id=account.id,
-        graph_message_id=graph_message_id,
-        subject=PRIVACY_SUBJECT_PLACEHOLDER,
-        body=PRIVACY_BODY_PLACEHOLDER,
-        sender=PRIVACY_SENDER_PLACEHOLDER,
-        source_account=account.account_email,
-        original_category=predicted_category,
-        predicted_category=predicted_category,
-        confidence=float(confidence or 0.0),
-        was_corrected=False,
-        is_synced_from_microsoft=True,
-        received_at=received_at or datetime.utcnow(),
+    if not cleaned_items:
+        return {}
+
+    graph_ids = [item["graph_message_id"] for item in cleaned_items]
+
+    existing_emails = (
+        db.query(Email)
+        .filter(
+            Email.owner_user_id == owner.id,
+            Email.linked_account_id == account.id,
+            Email.graph_message_id.in_(graph_ids),
+        )
+        .all()
     )
-    db.add(email)
+    existing_by_graph_id = {email.graph_message_id: email for email in existing_emails}
+
+    result: dict[str, Email] = {}
+    new_emails: list[Email] = []
+
+    for item in cleaned_items:
+        graph_message_id = item["graph_message_id"]
+        predicted_category = normalize_category(item.get("predicted_category"))
+        confidence = float(item.get("confidence") or 0.0)
+        received_at = item.get("received_at")
+
+        email = existing_by_graph_id.get(graph_message_id)
+
+        if email:
+            email.source_account = account.account_email
+            email.is_synced_from_microsoft = True
+            email.linked_account_id = account.id
+            if received_at:
+                email.received_at = received_at
+
+            if not email.was_corrected:
+                email.original_category = predicted_category
+                email.predicted_category = predicted_category
+                email.confidence = confidence
+
+            # Reforzar privacidad por si existían registros antiguos con contenido.
+            email.subject = PRIVACY_SUBJECT_PLACEHOLDER
+            email.body = PRIVACY_BODY_PLACEHOLDER
+            email.sender = PRIVACY_SENDER_PLACEHOLDER
+        else:
+            email = Email(
+                owner_user_id=owner.id,
+                linked_account_id=account.id,
+                graph_message_id=graph_message_id,
+                subject=PRIVACY_SUBJECT_PLACEHOLDER,
+                body=PRIVACY_BODY_PLACEHOLDER,
+                sender=PRIVACY_SENDER_PLACEHOLDER,
+                source_account=account.account_email,
+                original_category=predicted_category,
+                predicted_category=predicted_category,
+                confidence=confidence,
+                was_corrected=False,
+                is_synced_from_microsoft=True,
+                received_at=received_at or datetime.utcnow(),
+            )
+            db.add(email)
+            new_emails.append(email)
+
+        result[graph_message_id] = email
+
     db.commit()
-    db.refresh(email)
-    return email
+
+    return result
 
 
 def update_microsoft_email_correction(
@@ -208,11 +248,7 @@ def update_microsoft_email_correction(
     graph_message_id: str,
     corrected_category: str,
 ) -> Email:
-    """
-    Guarda la corrección manual sin almacenar contenido real del correo.
-    El campo predicted_category queda como la categoría final actual.
-    El campo original_category conserva la predicción inicial del modelo.
-    """
+    """Guarda corrección manual sin almacenar contenido real del correo."""
     corrected_category = normalize_category(corrected_category)
 
     email = get_email_by_graph_message_id(
@@ -262,10 +298,7 @@ def list_user_emails(db: Session, *, owner: User) -> list[Email]:
         .outerjoin(LinkedAccount, Email.linked_account_id == LinkedAccount.id)
         .filter(
             Email.owner_user_id == owner.id,
-            or_(
-                Email.linked_account_id == None,
-                LinkedAccount.is_active == True,
-            ),
+            or_(Email.linked_account_id == None, LinkedAccount.is_active == True),
         )
         .order_by(Email.received_at.desc())
         .all()
@@ -298,17 +331,13 @@ def list_user_emails_by_category(
     category: str,
 ) -> list[Email]:
     category = normalize_category(category)
-
     return (
         db.query(Email)
         .outerjoin(LinkedAccount, Email.linked_account_id == LinkedAccount.id)
         .filter(
             Email.owner_user_id == owner.id,
             Email.predicted_category == category,
-            or_(
-                Email.linked_account_id == None,
-                LinkedAccount.is_active == True,
-            ),
+            or_(Email.linked_account_id == None, LinkedAccount.is_active == True),
         )
         .order_by(Email.received_at.desc())
         .all()
@@ -318,10 +347,7 @@ def list_user_emails_by_category(
 def get_user_email_by_id(db: Session, *, owner: User, email_id: int) -> Email | None:
     return (
         db.query(Email)
-        .filter(
-            Email.owner_user_id == owner.id,
-            Email.id == email_id,
-        )
+        .filter(Email.owner_user_id == owner.id, Email.id == email_id)
         .first()
     )
 
@@ -334,13 +360,9 @@ def update_email_category(
     new_category: str,
 ) -> Email | None:
     new_category = normalize_category(new_category)
-
     email = (
         db.query(Email)
-        .filter(
-            Email.id == email_id,
-            Email.owner_user_id == owner.id,
-        )
+        .filter(Email.id == email_id, Email.owner_user_id == owner.id)
         .first()
     )
 
@@ -355,11 +377,9 @@ def update_email_category(
         email.confidence = 1.0
         email.was_corrected = True
 
-    # Reforzar privacidad en registros existentes.
-    if email.is_synced_from_microsoft:
-        email.subject = PRIVACY_SUBJECT_PLACEHOLDER
-        email.body = PRIVACY_BODY_PLACEHOLDER
-        email.sender = PRIVACY_SENDER_PLACEHOLDER
+    email.subject = PRIVACY_SUBJECT_PLACEHOLDER
+    email.body = PRIVACY_BODY_PLACEHOLDER
+    email.sender = PRIVACY_SENDER_PLACEHOLDER
 
     db.commit()
     db.refresh(email)
@@ -373,13 +393,11 @@ def sync_emails_from_microsoft_account(
     account: LinkedAccount,
     top: int = 1000,
 ) -> list[Email]:
-    """
-    Sincroniza metadatos mínimos de Microsoft Graph.
-    No guarda contenido del correo.
-    """
     access_token = get_valid_microsoft_access_token(db, account=account)
     messages = get_account_messages(access_token=access_token, top=top)
-    saved_emails: list[Email] = []
+
+    email_pairs: list[tuple[str, str]] = []
+    prepared_items: list[dict] = []
 
     for msg in messages:
         graph_message_id = msg.get("id")
@@ -390,95 +408,40 @@ def sync_emails_from_microsoft_account(
         body_preview = msg.get("bodyPreview") or ""
         received_at = parse_graph_datetime(msg.get("receivedDateTime"))
 
-        category, confidence = classify_email(subject, body_preview)
+        email_pairs.append((subject, body_preview))
+        prepared_items.append(
+            {
+                "graph_message_id": graph_message_id,
+                "received_at": received_at,
+            }
+        )
+
+    classifications = classify_emails_batch(email_pairs)
+
+    metadata_items: list[dict] = []
+    for item, (category, confidence) in zip(prepared_items, classifications):
         if confidence < CONFIDENCE_THRESHOLD:
             category = "otros"
-
-        email = upsert_microsoft_email_metadata(
-            db,
-            owner=owner,
-            account=account,
-            graph_message_id=graph_message_id,
-            predicted_category=category,
-            confidence=float(confidence),
-            received_at=received_at,
+        metadata_items.append(
+            {
+                **item,
+                "predicted_category": category,
+                "confidence": float(confidence),
+            }
         )
-        saved_emails.append(email)
 
-    return saved_emails
-
-
-def get_advanced_statistics(db: Session, *, owner: User) -> dict:
-    emails = (
-        db.query(Email)
-        .outerjoin(LinkedAccount, Email.linked_account_id == LinkedAccount.id)
-        .filter(
-            Email.owner_user_id == owner.id,
-            Email.source_account != "local-demo",
-            or_(
-                Email.linked_account_id == None,
-                LinkedAccount.is_active == True,
-            ),
-        )
-        .all()
-    )
-    return build_statistics_from_emails(emails)
-
-
-
-def build_user_label_map(db: Session, user_ids: set[int]) -> dict[int, str]:
-    """Devuelve etiquetas legibles para el panel administrativo."""
-    if not user_ids:
-        return {}
-
-    users = db.query(User).filter(User.id.in_(user_ids)).all()
-    labels: dict[int, str] = {}
-
-    for user in users:
-        name = (user.name or "").strip()
-        email = (user.email or "").strip()
-
-        if name and email:
-            labels[user.id] = f"{name} ({email})"
-        elif name:
-            labels[user.id] = name
-        elif email:
-            labels[user.id] = email
-        else:
-            labels[user.id] = f"Usuario #{user.id}"
-
-    return labels
-
-def get_global_advanced_statistics(db: Session) -> dict:
-    emails = (
-        db.query(Email)
-        .outerjoin(LinkedAccount, Email.linked_account_id == LinkedAccount.id)
-        .filter(
-            Email.source_account != "local-demo",
-            or_(
-                Email.linked_account_id == None,
-                LinkedAccount.is_active == True,
-            ),
-        )
-        .all()
-    )
-    user_ids = {e.owner_user_id for e in emails if e.owner_user_id is not None}
-    user_labels = build_user_label_map(db, user_ids)
-
-    return build_statistics_from_emails(
-        emails,
-        include_global_breakdowns=True,
-        user_labels=user_labels,
+    stored_by_graph_id = upsert_microsoft_email_metadata_bulk(
+        db,
+        owner=owner,
+        account=account,
+        items=metadata_items,
     )
 
+    return list(stored_by_graph_id.values())
 
-def build_statistics_from_emails(
-    emails: list[Email],
-    include_global_breakdowns: bool = False,
-    user_labels: dict[int, str] | None = None,
-) -> dict:
+
+def build_statistics_from_emails(emails: list[Email], include_global_breakdowns: bool = False) -> dict:
     total = len(emails)
-
     empty = {
         "total_emails": 0,
         "by_category": {},
@@ -517,28 +480,43 @@ def build_statistics_from_emails(
 
     if include_global_breakdowns:
         accounts = [e.source_account for e in emails if e.source_account]
-        user_values = []
-        labels = user_labels or {}
-
-        for e in emails:
-            if e.owner_user_id is None:
-                continue
-
-            user_values.append(labels.get(e.owner_user_id, f"Usuario #{e.owner_user_id}"))
-
+        users = [e.owner_user_id for e in emails if e.owner_user_id is not None]
         result["by_account"] = dict(Counter(accounts))
-        result["by_user"] = dict(Counter(user_values))
+        result["by_user"] = dict(Counter(users))
 
     return result
 
 
+def get_advanced_statistics(db: Session, *, owner: User) -> dict:
+    emails = (
+        db.query(Email)
+        .outerjoin(LinkedAccount, Email.linked_account_id == LinkedAccount.id)
+        .filter(
+            Email.owner_user_id == owner.id,
+            Email.source_account != "local-demo",
+            or_(Email.linked_account_id == None, LinkedAccount.is_active == True),
+        )
+        .all()
+    )
+    return build_statistics_from_emails(emails)
+
+
+def get_global_advanced_statistics(db: Session) -> dict:
+    emails = (
+        db.query(Email)
+        .outerjoin(LinkedAccount, Email.linked_account_id == LinkedAccount.id)
+        .filter(
+            Email.source_account != "local-demo",
+            or_(Email.linked_account_id == None, LinkedAccount.is_active == True),
+        )
+        .all()
+    )
+    return build_statistics_from_emails(emails, include_global_breakdowns=True)
+
+
 def parse_chatbot_query(query: str) -> tuple[str, dict]:
     text = (query or "").strip().lower()
-    filters = {
-        "category": None,
-        "sender_contains": None,
-        "text_contains": None,
-    }
+    filters = {"category": None, "sender_contains": None, "text_contains": None}
     intent = "search"
 
     categories = ["urgente", "trabajo", "educacion", "spam", "otros", "salud"]
@@ -583,7 +561,6 @@ def search_emails_for_chatbot(
     if filters.get("category"):
         query = query.filter(Email.predicted_category == filters["category"])
 
-    # Por privacidad, sender/text search puede no encontrar contenido real porque no se guarda.
     if filters.get("sender_contains"):
         sender_value = f"%{filters['sender_contains']}%"
         query = query.filter(Email.sender.ilike(sender_value))
@@ -613,7 +590,10 @@ def build_chatbot_summary(filters: dict, emails: list[Email]) -> str:
         parts.append(f"relacionados con '{text_contains}'")
 
     summary = " ".join(parts) + "."
-    summary += " Por privacidad, no se almacenan asuntos ni cuerpos completos de correos."
+    top_subjects = [e.subject for e in emails[:3] if e.subject]
+    if top_subjects:
+        summary += " Algunos asuntos encontrados son: " + "; ".join(top_subjects) + "."
+
     return summary
 
 
@@ -621,6 +601,7 @@ def chatbot_email_query(db: Session, *, owner: User, user_query: str) -> dict:
     intent, filters = parse_chatbot_query(user_query)
     emails = search_emails_for_chatbot(db, owner=owner, filters=filters, limit=10)
     summary = build_chatbot_summary(filters, emails)
+
     return {
         "intent": intent,
         "applied_filters": filters,
@@ -630,58 +611,21 @@ def chatbot_email_query(db: Session, *, owner: User, user_query: str) -> dict:
     }
 
 
-def reclassify_all_emails(db: Session):
-    """
-    Reclasifica correos de Microsoft consultando temporalmente Microsoft Graph.
-    No guarda contenido del correo; solo actualiza categoría/confianza.
-    """
-    emails = (
-        db.query(Email)
-        .outerjoin(LinkedAccount, Email.linked_account_id == LinkedAccount.id)
-        .filter(
-            Email.source_account != "local-demo",
-            Email.is_synced_from_microsoft == True,
-            Email.graph_message_id != None,
-            LinkedAccount.is_active == True,
-        )
-        .all()
-    )
-
+def reclassify_all_emails(db: Session) -> dict:
+    emails = db.query(Email).all()
     updated = 0
-    skipped = 0
 
     for email in emails:
-        if email.was_corrected:
-            skipped += 1
-            continue
-
-        account = email.linked_account
-        if not account:
-            skipped += 1
-            continue
-
-        try:
-            access_token = get_valid_microsoft_access_token(db, account=account)
-            detail = get_account_message_detail(access_token=access_token, message_id=email.graph_message_id)
-            subject = detail.get("subject") or ""
-            body = detail.get("body") or ""
-            category, confidence = classify_email(subject, body)
-            if confidence < CONFIDENCE_THRESHOLD:
-                category = "otros"
-
-            email.original_category = category
-            email.predicted_category = category
-            email.confidence = float(confidence or 0.0)
-            email.subject = PRIVACY_SUBJECT_PLACEHOLDER
-            email.body = PRIVACY_BODY_PLACEHOLDER
-            email.sender = PRIVACY_SENDER_PLACEHOLDER
-            updated += 1
-        except Exception:
-            skipped += 1
+        category, confidence = classify_email(email.subject, email.body)
+        if confidence < CONFIDENCE_THRESHOLD:
+            category = "otros"
+        email.predicted_category = category
+        email.confidence = float(confidence)
+        updated += 1
 
     db.commit()
+
     return {
-        "message": "Correos reclasificados sin almacenar contenido del correo",
-        "total_updated": updated,
-        "total_skipped": skipped,
+        "message": "Correos reclasificados correctamente",
+        "updated": updated,
     }

@@ -12,7 +12,7 @@ from sklearn.model_selection import train_test_split
 from sqlalchemy.orm import Session
 
 from app.models.email import Email
-from app.ml.classifier import MODEL_PATH, VECTORIZER_PATH, FEATURE_CONFIG_PATH
+from app.ml.classifier import MODEL_PATH, VECTORIZER_PATH, FEATURE_CONFIG_PATH, clear_model_cache
 from app.ml.features import build_hybrid_matrix, preprocess_text
 from app.services.microsoft_graph_service import (
     get_account_message_detail,
@@ -198,6 +198,7 @@ def retrain_model_from_all_sources(db: Session) -> dict:
     joblib.dump(model, MODEL_PATH)
     joblib.dump(vectorizer, VECTORIZER_PATH)
     joblib.dump(feature_config, FEATURE_CONFIG_PATH)
+    clear_model_cache()
 
     return {
         "message": "Modelo entrenado: Logistic Regression + TF-IDF n-gramas + meta-features",
