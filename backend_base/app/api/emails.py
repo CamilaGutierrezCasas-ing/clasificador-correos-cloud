@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user, require_roles
 from app.db.session import get_db
 from app.ml.classifier import MODEL_VERSION, classify_email, classify_emails_batch
+from app.ml.sender_rules import apply_sender_context_rules
 from app.models.linked_account import LinkedAccount
 from app.models.user import User
 from app.services.microsoft_graph_service import (
@@ -76,9 +77,16 @@ def classify_and_save_email(
     current_user: User = Depends(get_current_user),
 ) -> EmailClassifyResponse:
     category, confidence = classify_email(payload.subject, payload.body)
+    category, confidence = apply_sender_context_rules(
+        sender=payload.sender,
+        subject=payload.subject,
+        body_preview=payload.body,
+        category=category,
+        confidence=confidence,
+    )
     # No se fuerza la categoría a "otros" por baja confianza.
     # La baja confianza se reporta en estadísticas para revisión,
-    # pero se conserva la categoría predicha por el modelo.
+    # pero se conserva la categoría predicha por el modelo o ajustada por remitente.
 
     email = create_classified_email(
         db,
@@ -219,7 +227,16 @@ def read_live_microsoft_emails(
 
     metadata_items: list[dict] = []
     for item, (category, confidence) in zip(display_items, classifications):
-        # No forzar a "otros" por baja confianza; conservar predicción del modelo.
+        # Usar remitente/dominio solo en memoria para mejorar la categoría.
+        # No se almacena el remitente ni el contenido del correo.
+        category, confidence = apply_sender_context_rules(
+            sender=item["sender"],
+            subject=item["subject"],
+            body_preview=item["body"],
+            category=category,
+            confidence=confidence,
+        )
+        # No forzar a "otros" por baja confianza; conservar predicción del modelo o regla.
         metadata_items.append(
             {
                 "graph_message_id": item["graph_message_id"],
@@ -287,9 +304,16 @@ def read_live_microsoft_email_detail(
     sender = live_detail.get("sender") or "desconocido"
 
     category, confidence = classify_email(subject, body)
+    category, confidence = apply_sender_context_rules(
+        sender=sender,
+        subject=subject,
+        body_preview=body,
+        category=category,
+        confidence=confidence,
+    )
     # No se fuerza la categoría a "otros" por baja confianza.
     # La baja confianza se reporta en estadísticas para revisión,
-    # pero se conserva la categoría predicha por el modelo.
+    # pero se conserva la categoría predicha por el modelo o ajustada por remitente.
 
     stored_email = upsert_microsoft_email_metadata(
         db,
