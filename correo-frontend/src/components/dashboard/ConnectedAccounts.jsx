@@ -8,20 +8,33 @@ export default function ConnectedAccounts({
   onConnect,
   onDisconnect,
   onSync,
+  onSyncAll,
   loading,
+  syncing = false,
 }) {
+  const activeAccounts = accounts.filter((account) => account.is_active);
+
   return (
     <Card
       title="Cuentas Microsoft conectadas"
       subtitle="Gestiona las cuentas vinculadas con Microsoft Graph."
-      actions={<Button onClick={onConnect}>Conectar cuenta</Button>}
+      actions={
+        <div className="flex flex-wrap gap-2">
+          {activeAccounts.length > 0 && (
+            <Button variant="secondary" onClick={onSyncAll} disabled={syncing}>
+              {syncing ? 'Sincronizando...' : 'Sincronizar todas'}
+            </Button>
+          )}
+          <Button onClick={onConnect}>Conectar cuenta</Button>
+        </div>
+      }
     >
       {loading ? (
         <p className="text-sm text-slate-500">Cargando cuentas...</p>
       ) : accounts.length === 0 ? (
         <EmptyState
           title="No hay cuentas conectadas"
-          description="Conecta una cuenta Microsoft para sincronizar correos."
+          description="Conecta una cuenta Microsoft para consultar correos en vivo."
         />
       ) : (
         <div className="space-y-4">
@@ -41,7 +54,12 @@ export default function ConnectedAccounts({
               </div>
 
               <div className="flex gap-2">
-                <Button onClick={() => onSync(account.id)}>Sincronizar</Button>
+                <Button
+                  onClick={() => onSync(account.id)}
+                  disabled={syncing || !account.is_active}
+                >
+                  {syncing ? 'Consultando...' : 'Sincronizar'}
+                </Button>
                 <Button variant="danger" onClick={() => onDisconnect(account.id)}>
                   Desconectar
                 </Button>

@@ -33,15 +33,11 @@ export const updateEmailCategory = async (emailId, category) => {
 export const updateLiveEmailCategory = async ({
   accountId,
   messageId,
-  subject,
-  sender,
   category,
 }) => {
   const { data } = await api.put('/emails/live/category', {
     account_id: accountId,
     message_id: messageId,
-    subject,
-    sender,
     category,
   });
 

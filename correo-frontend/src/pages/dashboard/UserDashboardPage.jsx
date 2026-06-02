@@ -9,9 +9,6 @@ import ConnectedAccounts from '../../components/dashboard/ConnectedAccounts';
 import EmailTable from '../../components/dashboard/EmailTable';
 import StatCard from '../../components/common/StatCard';
 import {
-  getMyEmails,
-  getEmailDetail,
-  getEmailsByCategory,
   getLiveEmailsByAccount,
   getLiveEmailDetail,
 } from '../../api/emailApi';
@@ -27,57 +24,12 @@ export default function UserDashboardPage() {
   const [accounts, setAccounts] = useState([]);
   const [emails, setEmails] = useState([]);
   const [liveEmails, setLiveEmails] = useState([]);
-  const [isLiveMode, setIsLiveMode] = useState(false);
   const [loadingAccounts, setLoadingAccounts] = useState(true);
-  const [loadingEmails, setLoadingEmails] = useState(true);
+  const [loadingEmails, setLoadingEmails] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('todos');
   const [selectedEmail, setSelectedEmail] = useState(null);
-
-  const loadAccounts = async () => {
-    setLoadingAccounts(true);
-    try {
-      const data = await getMicrosoftAccounts();
-      setAccounts(data);
-    } finally {
-      setLoadingAccounts(false);
-    }
-  };
-
-  const loadEmails = async () => {
-    setLoadingEmails(true);
-    try {
-      setIsLiveMode(false);
-      setLiveEmails([]);
-      const data = await getMyEmails();
-      setEmails(data);
-    } finally {
-      setLoadingEmails(false);
-    }
-  };
-
-  useEffect(() => {
-    loadAccounts();
-    loadEmails();
-  }, []);
-
-  const handleConnect = async () => {
-    const data = await getMicrosoftConnectUrl();
-    window.location.href = data.authorization_url;
-  };
-
-  const handleDisconnect = async (accountId) => {
-    await disconnectMicrosoftAccount(accountId);
-    await loadAccounts();
-
-    if (isLiveMode) {
-      const remaining = liveEmails.filter(
-        (email) => email.linked_account_id !== accountId
-      );
-      setLiveEmails(remaining);
-      setEmails(applyCategoryFilter(remaining, selectedCategory));
-      setIsLiveMode(remaining.length > 0);
-    }
-  };
+  const [syncMessage, setSyncMessage] = useState('');
+  const [syncError, setSyncError] = useState('');
 
   const applyCategoryFilter = (items, category) => {
     if (category === 'todos') return items;
@@ -92,78 +44,138 @@ export default function UserDashboardPage() {
     return String(email?.id || '');
   };
 
-  const mergeLiveEmails = (currentItems, newItems) => {
+  const mergeAccountLiveEmails = (currentItems, accountId, newItems) => {
+    const withoutCurrentAccount = currentItems.filter(
+      (email) => Number(email.linked_account_id) !== Number(accountId)
+    );
+
     const merged = new Map();
 
-    currentItems.forEach((email) => {
-      merged.set(getEmailKey(email), email);
-    });
-
-    newItems.forEach((email) => {
-      const key = getEmailKey(email);
-      const previous = merged.get(key);
-      merged.set(key, previous ? { ...previous, ...email } : email);
+    [...withoutCurrentAccount, ...newItems].forEach((email) => {
+      merged.set(getEmailKey(email), { ...email, is_live: true });
     });
 
     return Array.from(merged.values());
   };
 
+  const loadAccounts = async () => {
+    setLoadingAccounts(true);
+    try {
+      const data = await getMicrosoftAccounts();
+      setAccounts(data);
+    } finally {
+      setLoadingAccounts(false);
+    }
+  };
+
+  useEffect(() => {
+    loadAccounts();
+  }, []);
+
+  const handleConnect = async () => {
+    const data = await getMicrosoftConnectUrl();
+    window.location.href = data.authorization_url;
+  };
+
+  const handleDisconnect = async (accountId) => {
+    await disconnectMicrosoftAccount(accountId);
+    await loadAccounts();
+
+    setLiveEmails((prev) => {
+      const remaining = prev.filter(
+        (email) => Number(email.linked_account_id) !== Number(accountId)
+      );
+      setEmails(applyCategoryFilter(remaining, selectedCategory));
+      return remaining;
+    });
+  };
+
   const handleSync = async (accountId) => {
     setLoadingEmails(true);
+    setSyncMessage('');
+    setSyncError('');
 
     try {
       const data = await getLiveEmailsByAccount(accountId, PER_ACCOUNT_LIMIT);
 
-      setIsLiveMode(true);
-
       setLiveEmails((prev) => {
-        const merged = mergeLiveEmails(prev, data);
+        const merged = mergeAccountLiveEmails(prev, accountId, data);
         setEmails(applyCategoryFilter(merged, selectedCategory));
         return merged;
       });
+
+      setSyncMessage(
+        `Cuenta sincronizada en vivo. Se consultaron ${data.length} correos temporalmente desde Microsoft Graph.`
+      );
+    } catch (error) {
+      console.error('No se pudo sincronizar la cuenta:', error);
+      setSyncError(
+        error?.response?.data?.detail ||
+          'No se pudo sincronizar la cuenta. Revisa la conexión con Microsoft Graph.'
+      );
     } finally {
       setLoadingEmails(false);
     }
   };
 
-  const handleCategoryFilter = async (category) => {
-    setSelectedCategory(category);
+  const handleSyncAll = async () => {
+    const activeAccounts = accounts.filter((account) => account.is_active);
+
+    if (activeAccounts.length === 0) {
+      setSyncError('No hay cuentas Microsoft activas para sincronizar.');
+      return;
+    }
+
     setLoadingEmails(true);
+    setSyncMessage('');
+    setSyncError('');
 
     try {
-      if (isLiveMode) {
-        setEmails(applyCategoryFilter(liveEmails, category));
-        return;
+      let merged = liveEmails;
+      let totalLoaded = 0;
+
+      for (const account of activeAccounts) {
+        const data = await getLiveEmailsByAccount(account.id, PER_ACCOUNT_LIMIT);
+        totalLoaded += data.length;
+        merged = mergeAccountLiveEmails(merged, account.id, data);
       }
 
-      const data =
-        category === 'todos' ? await getMyEmails() : await getEmailsByCategory(category);
-      setEmails(data);
+      setLiveEmails(merged);
+      setEmails(applyCategoryFilter(merged, selectedCategory));
+      setSyncMessage(
+        `Sincronización en vivo completada. Se consultaron ${totalLoaded} correos de ${activeAccounts.length} cuenta(s).`
+      );
+    } catch (error) {
+      console.error('No se pudieron sincronizar todas las cuentas:', error);
+      setSyncError(
+        error?.response?.data?.detail ||
+          'No se pudieron sincronizar todas las cuentas. Intenta cuenta por cuenta.'
+      );
     } finally {
       setLoadingEmails(false);
     }
+  };
+
+  const handleCategoryFilter = (category) => {
+    setSelectedCategory(category);
+    setEmails(applyCategoryFilter(liveEmails, category));
   };
 
   const handleViewDetail = async (email) => {
     setSelectedEmail(email);
 
     try {
-      if (email.is_live) {
-        const detail = await getLiveEmailDetail(
-          email.linked_account_id,
-          email.graph_message_id
-        );
+      const detail = await getLiveEmailDetail(
+        email.linked_account_id,
+        email.graph_message_id
+      );
 
-        setSelectedEmail({
-          ...email,
-          ...detail,
-          is_live: true,
-        });
-        return;
-      }
-
-      const detail = await getEmailDetail(email.id);
-      setSelectedEmail(detail);
+      setSelectedEmail({
+        ...email,
+        ...detail,
+        id: email.id,
+        is_live: true,
+      });
     } catch (error) {
       console.error('No se pudo cargar el detalle del correo:', error);
     }
@@ -176,46 +188,48 @@ export default function UserDashboardPage() {
       item.graph_message_id &&
       updatedEmail.graph_message_id &&
       item.graph_message_id === updatedEmail.graph_message_id &&
-      item.linked_account_id === updatedEmail.linked_account_id
+      Number(item.linked_account_id) === Number(updatedEmail.linked_account_id)
     );
   };
 
   const handleEmailUpdated = (updatedEmail) => {
     if (!updatedEmail) return;
 
-    if (updatedEmail.is_live) {
-      setLiveEmails((prev) => {
-        const updatedLiveEmails = prev.map((item) =>
-          sameEmail(item, updatedEmail)
-            ? {
-                ...item,
-                ...updatedEmail,
-                id: item.id,
-                is_live: true,
-              }
-            : item
-        );
+    setLiveEmails((prev) => {
+      const updatedLiveEmails = prev.map((item) =>
+        sameEmail(item, updatedEmail)
+          ? {
+              ...item,
+              ...updatedEmail,
+              id: item.id,
+              is_live: true,
+            }
+          : item
+      );
 
-        setEmails(applyCategoryFilter(updatedLiveEmails, selectedCategory));
-        return updatedLiveEmails;
-      });
+      setEmails(applyCategoryFilter(updatedLiveEmails, selectedCategory));
+      return updatedLiveEmails;
+    });
 
-      setSelectedEmail(updatedEmail);
-      return;
-    }
-
-    setEmails((prev) =>
-      prev.map((item) => (item.id === updatedEmail.id ? updatedEmail : item))
+    setSelectedEmail((prev) =>
+      prev
+        ? {
+            ...prev,
+            ...updatedEmail,
+            id: prev.id,
+            is_live: true,
+          }
+        : updatedEmail
     );
-    setSelectedEmail(updatedEmail);
   };
 
   const stats = useMemo(() => {
     return {
       connectedAccounts: accounts.filter((item) => item.is_active).length,
-      processedEmails: emails.length,
+      liveCount: liveEmails.length,
+      visibleCount: emails.length,
     };
-  }, [accounts, emails]);
+  }, [accounts, emails, liveEmails]);
 
   return (
     <DashboardLayout
@@ -229,12 +243,12 @@ export default function UserDashboardPage() {
           hint="Cuentas Microsoft vinculadas"
         />
         <StatCard
-          label={isLiveMode ? 'Correos en vivo' : 'Correos procesados'}
-          value={stats.processedEmails}
+          label="Correos en vivo"
+          value={stats.visibleCount}
           hint={
-            isLiveMode
+            selectedCategory === 'todos'
               ? 'Consultados temporalmente desde Microsoft Graph'
-              : 'Correos almacenados en tu historial'
+              : `Filtrados por categoría. Total en vivo: ${stats.liveCount}`
           }
         />
       </section>
@@ -243,13 +257,25 @@ export default function UserDashboardPage() {
         accounts={accounts}
         onConnect={handleConnect}
         onSync={handleSync}
+        onSyncAll={handleSyncAll}
         onDisconnect={handleDisconnect}
         loading={loadingAccounts}
+        syncing={loadingEmails}
       />
 
-      {isLiveMode && (
-        <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-          Estás viendo correos en vivo desde Microsoft Graph. Cada cuenta sincronizada se suma a la vista general. El contenido se muestra temporalmente y no se guarda en la base de datos.
+      <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+        Vista en vivo desde Microsoft Graph: el asunto, remitente y contenido se muestran temporalmente en pantalla, pero no se guardan en la base de datos. Al recargar, vuelve a sincronizar para consultarlos otra vez.
+      </div>
+
+      {syncMessage && (
+        <div className="rounded-2xl border border-green-100 bg-green-50 px-4 py-3 text-sm font-medium text-green-800">
+          {syncMessage}
+        </div>
+      )}
+
+      {syncError && (
+        <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
+          {syncError}
         </div>
       )}
 
@@ -257,9 +283,14 @@ export default function UserDashboardPage() {
         <EmailCategoriesSidebar selected={selectedCategory} onSelect={handleCategoryFilter} />
 
         {loadingEmails ? (
-          <p className="text-sm text-slate-500">Cargando correos...</p>
+          <p className="text-sm text-slate-500">Consultando correos en vivo...</p>
         ) : (
-          <EmailTable emails={emails} onViewDetail={handleViewDetail} />
+          <EmailTable
+            emails={emails}
+            title="Correos en vivo"
+            subtitle="Listado temporal consultado desde Microsoft Graph. No se almacena asunto, remitente ni contenido."
+            onViewDetail={handleViewDetail}
+          />
         )}
       </div>
 

@@ -31,8 +31,6 @@ export default function EmailDetailModal({ email, onClose, onUpdated }) {
         updated = await updateLiveEmailCategory({
           accountId: email.linked_account_id,
           messageId: email.graph_message_id,
-          subject: email.subject || 'Sin asunto',
-          sender: email.sender || 'desconocido',
           category,
         });
 
@@ -123,8 +121,7 @@ export default function EmailDetailModal({ email, onClose, onUpdated }) {
           </div>
           {email.is_live && (
             <p className="mt-2 text-xs text-slate-500">
-              Si corriges la categoría, el sistema guardará solo el asunto y la
-              categoría corregida para privacidad. No se almacena el cuerpo completo.
+              Si corriges la categoría, el sistema guardará solo el identificador técnico del correo y la categoría corregida. No se almacena asunto, remitente ni cuerpo.
             </p>
           )}
         </div>
