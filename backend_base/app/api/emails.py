@@ -76,8 +76,9 @@ def classify_and_save_email(
     current_user: User = Depends(get_current_user),
 ) -> EmailClassifyResponse:
     category, confidence = classify_email(payload.subject, payload.body)
-    if confidence < CONFIDENCE_THRESHOLD:
-        category = "otros"
+    # No se fuerza la categoría a "otros" por baja confianza.
+    # La baja confianza se reporta en estadísticas para revisión,
+    # pero se conserva la categoría predicha por el modelo.
 
     email = create_classified_email(
         db,
@@ -218,8 +219,7 @@ def read_live_microsoft_emails(
 
     metadata_items: list[dict] = []
     for item, (category, confidence) in zip(display_items, classifications):
-        if confidence < CONFIDENCE_THRESHOLD:
-            category = "otros"
+        # No forzar a "otros" por baja confianza; conservar predicción del modelo.
         metadata_items.append(
             {
                 "graph_message_id": item["graph_message_id"],
@@ -287,8 +287,9 @@ def read_live_microsoft_email_detail(
     sender = live_detail.get("sender") or "desconocido"
 
     category, confidence = classify_email(subject, body)
-    if confidence < CONFIDENCE_THRESHOLD:
-        category = "otros"
+    # No se fuerza la categoría a "otros" por baja confianza.
+    # La baja confianza se reporta en estadísticas para revisión,
+    # pero se conserva la categoría predicha por el modelo.
 
     stored_email = upsert_microsoft_email_metadata(
         db,

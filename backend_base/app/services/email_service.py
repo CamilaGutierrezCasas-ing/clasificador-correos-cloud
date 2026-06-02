@@ -420,8 +420,7 @@ def sync_emails_from_microsoft_account(
 
     metadata_items: list[dict] = []
     for item, (category, confidence) in zip(prepared_items, classifications):
-        if confidence < CONFIDENCE_THRESHOLD:
-            category = "otros"
+        # No forzar a "otros" por baja confianza; conservar predicción del modelo.
         metadata_items.append(
             {
                 **item,
@@ -617,8 +616,7 @@ def reclassify_all_emails(db: Session) -> dict:
 
     for email in emails:
         category, confidence = classify_email(email.subject, email.body)
-        if confidence < CONFIDENCE_THRESHOLD:
-            category = "otros"
+        # No forzar a "otros" por baja confianza; conservar predicción del modelo.
         email.predicted_category = category
         email.confidence = float(confidence)
         updated += 1
