@@ -52,7 +52,9 @@ function MetricsExplanation({ result }) {
   if (!result) return null;
 
   const accuracy = result.accuracy ?? 0;
+  const precisionMacro = result.precision_macro ?? 0;
   const recallMacro = result.recall_macro ?? 0;
+  const f1Macro = result.f1_macro ?? 0;
   const mcc = result.mcc_multiclass ?? 0;
 
   const testSamples = result.test_samples ?? 0;
@@ -68,12 +70,28 @@ function MetricsExplanation({ result }) {
         'Mide el porcentaje general de correos clasificados correctamente.',
     },
     {
+      name: 'Precision Macro',
+      formula: 'Promedio de precisión de todas las categorías',
+      calculation: 'Precisión de cada categoría / número de categorías',
+      value: precisionMacro.toFixed(4),
+      interpretation:
+         'Mide qué tan confiables son las predicciones del modelo en cada categoría, dando el mismo peso a todas.',
+    },
+    {
       name: 'Recall Macro',
       formula: 'Promedio del recall de todas las categorías',
       calculation: 'Recall de cada categoría / número de categorías',
       value: recallMacro.toFixed(4),
       interpretation:
         'Mide qué tan bien el modelo identifica los correos reales de cada categoría, dando el mismo peso a todas.',
+    },
+    {
+      name: 'F1 Macro',
+      formula: 'Promedio del F1-score de todas las categorías',
+      calculation: 'Balance entre precision y recall por categoría',
+      value: f1Macro.toFixed(4),
+      interpretation:
+         'Combina precisión y recall. Es útil cuando hay varias categorías o datos desbalanceados.',
     },
     {
       name: 'MCC Multiclase',
@@ -308,18 +326,31 @@ function TrainingResultPanel({ result }) {
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-2xl bg-brand-cream p-4">
           <p className="text-sm font-medium text-slate-500">Accuracy</p>
           <p className="mt-2 text-3xl font-bold text-brand-blueDark">
             {Number(result.accuracy || 0).toFixed(4)}
           </p>
         </div>
+        <div className="rounded-2xl bg-brand-cream p-4">
+          <p className="text-sm font-medium text-slate-500">Precision Macro</p>
+          <p className="mt-2 text-3xl font-bold text-brand-blueDark">
+            {Number(result.precision_macro || 0).toFixed(4)}
+          </p>
 
+        </div>
         <div className="rounded-2xl bg-brand-cream p-4">
           <p className="text-sm font-medium text-slate-500">Recall Macro</p>
           <p className="mt-2 text-3xl font-bold text-brand-blueDark">
             {Number(result.recall_macro || 0).toFixed(4)}
+          </p>
+        </div>
+        
+        <div className="rounded-2xl bg-brand-cream p-4">
+          <p className="text-sm font-medium text-slate-500">F1 Macro</p>
+          <p className="mt-2 text-3xl font-bold text-brand-blueDark">
+            {Number(result.f1_macro || 0).toFixed(4)}
           </p>
         </div>
 

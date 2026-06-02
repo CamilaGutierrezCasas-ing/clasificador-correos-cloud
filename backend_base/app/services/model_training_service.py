@@ -7,7 +7,14 @@ import unicodedata
 import joblib
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, confusion_matrix, recall_score, matthews_corrcoef
+from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    precision_score,
+    recall_score,
+    f1_score,
+    matthews_corrcoef,
+)
 from sklearn.model_selection import train_test_split
 from sqlalchemy.orm import Session
 
@@ -191,7 +198,28 @@ def retrain_model_from_all_sources(db: Session) -> dict:
     y_pred = model.predict(X_test_vec)
 
     accuracy = accuracy_score(y_test, y_pred)
-    recall_macro = recall_score(y_test, y_pred, average="macro", zero_division=0)
+
+    precision_macro = precision_score(
+    y_test,
+    y_pred,
+    average="macro",
+    zero_division=0,
+    )
+
+    recall_macro = recall_score(
+    y_test,
+    y_pred,
+    average="macro",
+    zero_division=0,
+    )
+
+    f1_macro = f1_score(
+    y_test,
+    y_pred,
+    average="macro",
+    zero_division=0,
+   )
+    
     mcc_multiclass = matthews_corrcoef(y_test, y_pred)
 
     Path(MODEL_PATH).parent.mkdir(parents=True, exist_ok=True)
@@ -209,7 +237,9 @@ def retrain_model_from_all_sources(db: Session) -> dict:
         "train_samples": len(X_train),
         "test_samples": len(X_test),
         "accuracy": round(float(accuracy), 4),
+        "precision_macro": round(float(precision_macro), 4),
         "recall_macro": round(float(recall_macro), 4),
+        "f1_macro": round(float(f1_macro), 4),
         "mcc_multiclass": round(float(mcc_multiclass), 4),
         "feature_strategy": feature_config,
         "categories": dict(Counter(labels)),
